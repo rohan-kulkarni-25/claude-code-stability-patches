@@ -1,6 +1,6 @@
 # Claude Code — Stability Patches
 
-> Me and Claude just found and fixed memory leaks, silent error swallowing, concurrency races, and resource leaks hiding in Claude Code's own CLI source.
+> Me and Claude are on a mission to make Claude Code rock stable. This is round one.
 
 ---
 
@@ -8,13 +8,13 @@
 
 We used Claude Code to audit itself. It found the bugs. We planned the fixes together. Then spun up 3 parallel Claude agents — they shipped all 5 phases in under 3 minutes.
 
-AI debugging AI, together. The future is wild.
+AI debugging AI, together. This is just the beginning.
 
-This repo contains the full TypeScript source of [Claude Code](https://claude.ai/claude-code) (Anthropic's CLI) with every fix applied — surgical, production-grade, independently shippable.
+This repo contains the full TypeScript source of [Claude Code](https://claude.ai/claude-code) (Anthropic's CLI) with every fix applied — surgical, production-grade, independently shippable. And we're not stopping here.
 
 ---
 
-## What We Found Wrong
+## What We Found Wrong (Round 1)
 
 Long-running Claude Code sessions (especially with agent swarms) had compounding stability issues nobody was seeing:
 
@@ -141,6 +141,30 @@ Not everything that looks leaky is leaky. We investigated all of these and clear
 
 ---
 
+## What's Next
+
+This was round one. We're going deeper.
+
+### Round 2: Modular Architecture (Planned)
+The codebase has **676 files over 200 lines** — including 25 monsters over 2,000 lines (`print.ts` at 5,594, `messages.ts` at 5,512, `sessionStorage.ts` at 5,105). We're planning a systematic decomposition to bring every file under 200 lines. Cleaner modules, faster reviews, fewer merge conflicts.
+
+### Round 3: Critical TODO Debt
+Production TODOs that need resolution:
+- **Cross-process lockfile for MCP auth token refresh** — prevents wasted concurrent refresh requests (`services/mcp/auth.ts`)
+- **EPIPE handling test coverage** — hook subprocess pipe errors need tests (`utils/hooks.ts`)
+- **Keep-alive permanent solution** — replace the SystemAPIErrorMessage stopgap (`services/api/withRetry.ts`)
+
+### Round 4: Test Infrastructure
+No test framework exists in this codebase today. We want to add:
+- Per-fix unit tests — spawn/evict agents, assert Map sizes return to baseline
+- Long-session soak tests — 50+ agent spawns, monitor heap over time
+- Concurrency stress tests — rapid concurrent history writes
+- Resource leak verification — `lsof` FD counts after dispose
+
+The goal: make Claude Code the most reliable AI CLI out there. We're not done yet.
+
+---
+
 ## How We Built This
 
 1. **We used Claude Code to audit its own source** — deep static analysis across 500K+ lines of TypeScript
@@ -148,7 +172,7 @@ Not everything that looks leaky is leaky. We investigated all of these and clear
 3. **Spun up 3 parallel Claude agents** — memory leak fixer, error visibility fixer, concurrency/resource fixer
 4. **All 5 phases shipped in ~3 minutes** wall clock
 
-That's it. AI debugging AI, with a human in the loop deciding what matters.
+AI debugging AI, with a human in the loop deciding what matters. And we're just getting started.
 
 ---
 
