@@ -1,30 +1,38 @@
 # Claude Code — Stability Patches
 
-> Surgical fixes for memory leaks, silent error swallowing, concurrency races, and resource leaks in the Claude Code CLI core.
+> Me and Claude just found and fixed memory leaks, silent error swallowing, concurrency races, and resource leaks hiding in Claude Code's own CLI source.
 
 ---
 
-## What This Is
+## The Story
 
-This repository contains the TypeScript source of [Claude Code](https://claude.ai/claude-code) (Anthropic's CLI) with **targeted stability improvements** identified through deep static analysis of the codebase. These are production-grade fixes — each independently shippable and testable — prioritized by user-facing impact.
+We used Claude Code to audit itself. It found the bugs. We planned the fixes together. Then spun up 3 parallel Claude agents — they shipped all 5 phases in under 3 minutes.
 
-## The Problem
+AI debugging AI, together. The future is wild.
 
-Long-running Claude Code sessions (especially with agent swarms) suffered from compounding instability:
+This repo contains the full TypeScript source of [Claude Code](https://claude.ai/claude-code) (Anthropic's CLI) with every fix applied — surgical, production-grade, independently shippable.
 
-| Category | Issue | Impact |
-|----------|-------|--------|
-| **Memory Leaks** | `agentNameRegistry`, `todos`, `sentSkillNames`, and `agentTranscriptSubdirs` Maps grew unbounded as agents spawned — nothing ever cleaned them up | RSS growth over time, eventual OOM in long sessions |
-| **Silent Errors** | 9 `.catch(() => {})` calls across bridge, API, and session code swallowed errors silently | Production debugging impossible — network failures, auth issues, and stream leaks invisible |
-| **Concurrency Races** | History flush used a manual `isWriting` boolean flag that could skip entries under rapid concurrent calls | Potential history entry loss |
+---
+
+## What We Found Wrong
+
+Long-running Claude Code sessions (especially with agent swarms) had compounding stability issues nobody was seeing:
+
+| Category | What Was Broken | What It Caused |
+|----------|----------------|----------------|
+| **Memory Leaks** | `agentNameRegistry`, `todos`, `sentSkillNames`, and `agentTranscriptSubdirs` Maps grew forever — nothing ever cleaned them up | RSS ballooning, eventual OOM in long sessions |
+| **Silent Errors** | 9 `.catch(() => {})` calls across bridge, API, and session code just... ate errors | Network failures, auth issues, stream leaks — all invisible. Good luck debugging production |
+| **Concurrency Races** | History flush used a hand-rolled `isWriting` boolean flag — classic race condition | Entries skipped under rapid concurrent calls |
 | **Resource Leaks** | `chokidar` file watchers closed with `void watcher.close()` (fire-and-forget) | File descriptor exhaustion in long sessions |
-| **No Cache Lifecycle** | 10+ independent module-level caches with no unified clear mechanism | Stale data after conversation clear, unbounded growth |
+| **No Cache Lifecycle** | 10+ independent module-level caches, no unified clear | Stale data after `/clear`, unbounded growth |
 
-## The Fix
+---
+
+## How We Fixed It
 
 ### Phase 1: Memory Leak Containment (5 fixes)
 
-**Centralized eviction hooks** (`utils/task/evictionHooks.ts`) — a pub-sub system so all cleanup logic runs automatically when tasks are evicted, preventing future leaks by design.
+We built a **centralized eviction hook system** — a pub-sub so all cleanup logic runs automatically when tasks die. No more manually wiring cleanup into every eviction path.
 
 ```
 Task evicted → notifyTaskEvicted(taskId)
@@ -42,15 +50,17 @@ Task evicted → notifyTaskEvicted(taskId)
 
 ### Phase 2: Silent Error Visibility (9 catches fixed)
 
-**`logAndSwallow` utility** — a drop-in replacement for `.catch(() => {})` that logs to debug output:
+We built a `logAndSwallow` utility — drop-in replacement for `.catch(() => {})` that actually tells you what happened:
 
 ```typescript
-// Before (invisible failures)
+// Before (good luck debugging this in production)
 await api.deregisterEnvironment(envId).catch(() => {})
 
-// After (debuggable)
+// After (now you can actually see what failed)
 await api.deregisterEnvironment(envId).catch(logAndSwallow('bridge:env-deregister'))
 ```
+
+Replaced all 9 silent catches across bridge teardown, stream cancellation, and session management.
 
 **Files changed:**
 - `utils/errors.ts` — new `logAndSwallow()` utility
@@ -61,18 +71,18 @@ await api.deregisterEnvironment(envId).catch(logAndSwallow('bridge:env-deregiste
 
 ### Phase 3: Concurrency Safety (2 fixes)
 
-**Promise-chain serialization** for history flushes:
+Replaced the hand-rolled flag-based state machine with **promise-chain serialization**. Simple, correct, no more races:
 
 ```typescript
-// Before (race-prone flag-based state machine)
+// Before (race-prone — can skip entries)
 let isWriting = false
 async function flushPromptHistory(retries) {
-  if (isWriting) return  // ← can skip entries
+  if (isWriting) return  // ← entries dropped here
   isWriting = true
   // ...
 }
 
-// After (naturally serialized)
+// After (naturally serialized, zero races)
 let flushQueue = Promise.resolve()
 async function flushPromptHistory() {
   flushQueue = flushQueue.then(() => immediateFlushHistory())
@@ -86,10 +96,10 @@ async function flushPromptHistory() {
 
 ### Phase 4: Resource Leak Prevention (2 fixes)
 
-All `chokidar` watcher `.close()` calls now properly awaited:
+Every `chokidar` watcher `.close()` call now properly awaited. No more leaking file descriptors on fast exit:
 
 ```typescript
-// Before (FD leak on fast exit)
+// Before (FD leak if process exits before chokidar finishes)
 void watcher.close()
 
 // After
@@ -102,7 +112,7 @@ await watcher.close()
 
 ### Phase 5: Structural Hardening (1 fix)
 
-**Centralized cache registry** for unified lifecycle management:
+Built a **centralized cache registry** so all module-level caches have a unified lifecycle:
 
 ```typescript
 registerCache('hlCache', () => hlCache.clear())
@@ -115,9 +125,11 @@ clearAllCaches()  // called on /clear and session reset
 - `utils/cacheRegistry.ts` — **new** — registry with `registerCache()` / `clearAllCaches()`
 - `commands/clear/caches.ts` — wired into clear command
 
-## Items Investigated and Confirmed Non-Issues
+---
 
-Not everything that looks leaky is leaky. These were analyzed and cleared:
+## Things That Looked Broken But Weren't
+
+Not everything that looks leaky is leaky. We investigated all of these and cleared them:
 
 - `imageStore.ts` — already bounded (`MAX_STORED_IMAGE_PATHS = 200`)
 - `intl.ts` rtfCache — bounded by finite key space (max 6 entries)
@@ -127,16 +139,18 @@ Not everything that looks leaky is leaky. These were analyzed and cleared:
 - `changeDetector.ts` MDM poll — cleaned up via `dispose()` + `registerCleanup`
 - `pending401Handlers` — cleaned up via `.finally()`
 
-## How It Was Built
+---
 
-Every fix in this repo was **planned by Claude Code, then implemented by a team of 3 parallel Claude Code agents** — each handling an independent phase of the work:
+## How We Built This
 
-1. **Deep analysis** — Claude explored the full codebase, identified real issues vs false positives
-2. **Surgical planning** — each fix scoped to be independently shippable with minimal blast radius
-3. **Parallel execution** — 3 agents worked simultaneously on memory leaks, error visibility, and concurrency/resource fixes
-4. **Verification** — all changes reviewed against the original plan
+1. **We used Claude Code to audit its own source** — deep static analysis across 500K+ lines of TypeScript
+2. **Planned the fixes together** — each scoped to be surgical, independently shippable, minimal blast radius
+3. **Spun up 3 parallel Claude agents** — memory leak fixer, error visibility fixer, concurrency/resource fixer
+4. **All 5 phases shipped in ~3 minutes** wall clock
 
-Total implementation time: ~3 minutes wall clock.
+That's it. AI debugging AI, with a human in the loop deciding what matters.
+
+---
 
 ## License
 
