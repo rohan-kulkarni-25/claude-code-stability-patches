@@ -1,0 +1,14 @@
+{
+  "name": "power-user-toolkit",
+  "version": "1.0.0",
+  "description": "Verification loops, context optimization, and anti-laziness toolkit. Injects ANT-grade verification instructions, stop-hook gates, and efficient codebase navigation patterns.",
+  "author": {
+    "name": "40verse"
+  },
+  "keywords": ["verification", "quality", "context-optimization", "anti-laziness"],
+  "hooks": "./hooks/hooks.json",
+  "commands": "../commands",
+  "agents": "../agents",
+  "skills": "../skills",
+  "outputStyles": "../output-styles"
+}
